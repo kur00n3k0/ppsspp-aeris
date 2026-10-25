@@ -49,6 +49,8 @@
 #include "UI/Store.h"
 #include "UI/UploadScreen.h"
 #include "UI/Background.h"
+#include "UI/XmbViews.h"
+#include "Common/Data/Text/Parsers.h"
 #include "Core/Config.h"
 #include "Common/Data/Text/I18n.h"
 #include "Core/Util/DarwinFileSystemServices.h" // For the browser
@@ -164,7 +166,10 @@ public:
 		return filename;
 	}
 	void GetContentDimensions(const UIContext &dc, float &w, float &h) const override {
-		if (gridStyle_) {
+		if (xmb_) {
+			w = 400;
+			h = Xmb::RowHeight(xmbFocus_.Value());
+		} else if (gridStyle_) {
 			w = 144 * g_Config.fGameGridScale;
 			h = 80 * g_Config.fGameGridScale;
 		} else if (viewMode_ == GameBrowserViewMode::LARGE_LIST) {
@@ -180,6 +185,9 @@ public:
 
 	void SetHoldEnabled(bool hold) {
 		holdEnabled_ = hold;
+	}
+	void SetXmbStyle(bool xmb) {
+		xmb_ = xmb;
 	}
 	bool Touch(const TouchInput &input) override {
 		hovering_ = bounds_.Contains(input.x, input.y);
@@ -313,10 +321,13 @@ private:
 	}
 
 	void UpdateVideo(const std::shared_ptr<GameInfo> &ginfo, bool wantVideo);
+	void DrawXmb(UIContext &dc, GameInfo *ginfo, Draw::Texture *texture, ImageID imageIcon);
+	std::string XmbSubtitle(GameInfo *ginfo) const;
 
 	// The large list has room for an info button on each line, doing the same as a long press.
+	// The XMB layout uses left and right for the categories, and triangle for the info.
 	bool HasInfoButton() const {
-		return viewMode_ == GameBrowserViewMode::LARGE_LIST && holdEnabled_;
+		return viewMode_ == GameBrowserViewMode::LARGE_LIST && holdEnabled_ && !xmb_;
 	}
 	Bounds InfoButtonBounds() const {
 		return Bounds(bounds_.x2() - LARGE_LIST_INFO_SIZE - LARGE_LIST_PAD, bounds_.centerY() - LARGE_LIST_INFO_SIZE * 0.5f, LARGE_LIST_INFO_SIZE, LARGE_LIST_INFO_SIZE);
@@ -344,6 +355,8 @@ private:
 
 	GameBrowserViewMode viewMode_;
 	bool gridStyle_;
+	bool xmb_ = false;
+	Xmb::FocusAnim xmbFocus_;
 	Path gamePath_;
 	std::string title_;
 
@@ -384,11 +397,15 @@ void GameButton::Draw(UIContext &dc) {
 	const bool largeList = viewMode_ == GameBrowserViewMode::LARGE_LIST;
 	// Like the XMB, only the selected game plays its video. Only keyboard/gamepad focus selects, since with
 	// touch or the mouse, getting a video to play without launching the game was too fiddly.
-	const bool wantVideo = largeList && HasFocus() && pmf_player_available();
+	const bool wantVideo = (largeList || xmb_) && HasFocus() && pmf_player_available();
 
 	GameInfoFlags infoFlags = GameInfoFlags::PARAM_SFO | GameInfoFlags::ICON;
 	if (wantVideo) {
 		infoFlags |= GameInfoFlags::ICON1_PMF;
+	}
+	if (xmb_) {
+		// For the subtitle.
+		infoFlags |= GameInfoFlags::SIZE;
 	}
 	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(dc.GetDrawContext(), gamePath_, infoFlags);
 	UpdateVideo(ginfo, wantVideo);
@@ -450,6 +467,11 @@ void GameButton::Draw(UIContext &dc) {
 		if (gamePath_.Type() == PathType::HTTP) {
 			imageIcon = ImageID("I_LINK_OUT_QUESTION");
 		}
+	}
+
+	if (xmb_) {
+		DrawXmb(dc, ginfo.get(), texture, imageIcon);
+		return;
 	}
 
 	Bounds overlayBounds = bounds_;
@@ -697,6 +719,143 @@ void GameButton::Draw(UIContext &dc) {
 	dc.RebindTexture();
 }
 
+std::string GameButton::XmbSubtitle(GameInfo *ginfo) const {
+	std::string ext = gamePath_.GetFileExtension();
+	if (!ext.empty() && ext[0] == '.') {
+		ext = ext.substr(1);
+	}
+	std::string type;
+	switch (ginfo->fileType) {
+	case IdentifiedFileType::PSP_PBP:
+	case IdentifiedFileType::PSP_PBP_DIRECTORY: type = "PBP"; break;
+	case IdentifiedFileType::PSP_ELF: type = "ELF"; break;
+	case IdentifiedFileType::PSP_PS1_PBP:
+	case IdentifiedFileType::PSX_ISO: type = "PS1"; break;
+	case IdentifiedFileType::PSP_SAVEDATA_DIRECTORY: type = GetI18NCategory(I18NCat::GAME)->T("SaveData"); break;
+	case IdentifiedFileType::PSP_ISO:
+	case IdentifiedFileType::PSP_ISO_NP:
+		type = ext.empty() ? "ISO" : ext;
+		break;
+	default:
+		type = ext;
+		break;
+	}
+	for (char &c : type) {
+		c = (char)toupper((unsigned char)c);
+	}
+	std::string subtitle = type;
+	auto append = [&](const std::string &part) {
+		if (!subtitle.empty()) {
+			subtitle += " \xC2\xB7 ";
+		}
+		subtitle += part;
+	};
+	if (ginfo->Ready(GameInfoFlags::SIZE) && ginfo->gameSizeOnDisk > 0) {
+		append(NiceSizeFormat(ginfo->gameSizeOnDisk));
+	}
+	if (g_Config.bShowIDOnGameIcon && !ginfo->id_version.empty() && ginfo->fileType != IdentifiedFileType::PSP_ELF) {
+		append(ginfo->id_version);
+	}
+	return subtitle;
+}
+
+void GameButton::DrawXmb(UIContext &dc, GameInfo *ginfo, Draw::Texture *texture, ImageID imageIcon) {
+	using namespace UI;
+	const float focus = xmbFocus_.Update(HasFocus());
+	Xmb::DrawRowGlass(dc, bounds_, focus, down_);
+
+	// ICON0 at 0.5x idle and 0.75x focused, hanging off the left of the row a bit.
+	const float cy = bounds_.centerY();
+	const float iconW = 72.0f + 36.0f * focus;
+	const float iconH = 40.0f + 20.0f * focus;
+	const Bounds iconBox(bounds_.x + Xmb::ROW_PAD_LEFT - 12.0f - 13.0f * focus, cy - iconH * 0.5f, iconW, iconH);
+
+	if (texture && video_) {
+		Draw::Texture *frame = video_->Update(dc.GetDrawContext(), videoStart_.ElapsedSeconds());
+		if (frame) {
+			texture = frame;
+		}
+	}
+
+	dc.Flush();
+	dc.RebindTexture();
+	if (texture) {
+		const float fade = ease((time_now_d() - ginfo->icon.timeLoaded) * 2);
+		float w = iconBox.w, h = iconBox.h;
+		const float tw = (float)texture->Width(), th = (float)texture->Height();
+		if (tw > 0 && th > 0) {
+			w = std::min(iconBox.h * tw / th, iconBox.w);
+		}
+		const float x = iconBox.x + (iconBox.w - w) * 0.5f;
+		const float y = iconBox.y + (iconBox.h - h) * 0.5f;
+		// 0 6px 16px -6px rgba(0,0,0,.5)
+		dc.Draw()->DrawImage4Grid(dc.GetTheme().dropShadow4Grid, x - 6.0f, y, x + w + 6.0f, y + h + 12.0f, blackAlpha(0.45f * fade), 1.0f);
+		dc.Flush();
+		dc.GetDrawContext()->BindTexture(0, texture);
+		dc.Draw()->DrawTexRect(x, y, x + w, y + h, 0, 0, 1, 1, whiteAlpha(fade));
+		dc.Flush();
+		dc.RebindTexture();
+	} else {
+		// No picture: a tile with the type's icon.
+		const float tile = Xmb::TileSize(focus);
+		const Bounds tileBounds(iconBox.centerX() - tile * 0.5f, cy - tile * 0.5f, tile, tile);
+		Xmb::Hue hue = Xmb::Hue::Aqua;
+		switch (ginfo->fileType) {
+		case IdentifiedFileType::ARCHIVE_ZIP:
+		case IdentifiedFileType::ARCHIVE_7Z:
+		case IdentifiedFileType::ARCHIVE_RAR:
+		case IdentifiedFileType::PSP_PKG: hue = Xmb::Hue::Amber; break;
+		case IdentifiedFileType::PSX_ISO:
+		case IdentifiedFileType::PSP_PS1_PBP: hue = Xmb::Hue::Violet; break;
+		case IdentifiedFileType::PSP_ELF:
+		case IdentifiedFileType::UNKNOWN_ELF: hue = Xmb::Hue::Lime; break;
+		case IdentifiedFileType::ERROR_IDENTIFYING:
+		case IdentifiedFileType::UNKNOWN_BIN: hue = Xmb::Hue::Coral; break;
+		default: break;
+		}
+		Xmb::DrawTile(dc, tileBounds, hue, imageIcon.isValid() ? imageIcon : ImageID("I_UMD"), "", focus);
+	}
+
+	if (ginfo->hasConfig && !ginfo->id.empty()) {
+		dc.Draw()->DrawImage(ImageID("I_GEAR_SMALL"), iconBox.x, iconBox.y2(), 0.8f, 0xFFFFFFFF, ALIGN_BOTTOMLEFT);
+	}
+	const int regionIndex = (int)ginfo->region;
+	if (g_Config.bShowRegionOnGameIcon && regionIndex >= 0 && regionIndex < (int)GameRegion::COUNT) {
+		static const char *const regionIcons[(int)GameRegion::COUNT] = { "I_FLAG_JP", "I_FLAG_US", "I_FLAG_EU", "I_FLAG_HK", "I_FLAG_AS", "I_FLAG_KO" };
+		dc.Draw()->DrawImage(ImageID(regionIcons[regionIndex]), iconBox.x2() - 3.0f, iconBox.y2() - 3.0f, 0.7f, 0xFFFFFFFF, ALIGN_BOTTOMRIGHT);
+	}
+
+	const std::string currentTitle = ginfo->GetTitle();
+	if (!currentTitle.empty()) {
+		title_ = ReplaceAll(currentTitle, "\n", " ");
+	}
+	const float textX = bounds_.x + Xmb::TextX(focus, true);
+	Xmb::DrawRowText(dc, textX, cy, bounds_.x2() - 20.0f - textX, title_, XmbSubtitle(ginfo), focus);
+
+	// Holding the accept button (or a long press) opens the game's screen, after a flash.
+	if (holdEnabled_ && holdStart_ != 0.0) {
+		const double held = time_now_d() - holdStart_;
+		const int frames = (int)(held * 60.0);
+		if (frames <= 60 || ((frames >> 3) & 1) != 0) {
+			dc.Draw()->DrawRoundRect(bounds_, 20.0f, whiteAlpha((float)(held / 2.5)));
+		}
+	}
+
+	GamePacker::Status packStatus;
+	if (GamePacker::IsPacking(gamePath_) && GamePacker::GetStatus(&packStatus)) {
+		auto ga = GetI18NCategory(I18NCat::GAME);
+		dc.FillRect(Drawable(0xD0505050), iconBox);
+		dc.SetFontStyle(dc.GetTheme().uiFont);
+		dc.SetFontScale(0.6f, 0.6f);
+		const std::string text = std::string(ga->T("Compressing...")) + StringFromFormat("\n%d%%", (int)(packStatus.progress * 100.0f));
+		dc.DrawTextRectSqueeze(text, iconBox, 0xFFFFFFFF, ALIGN_CENTER);
+		dc.SetFontScale(1.0f, 1.0f);
+	}
+
+	dc.Flush();
+	dc.RebindTexture();
+}
+
 std::string GameButton::DescribeText() const {
 	// LOW: search calls this for every game in the list, which mustn't hold up the visible ones.
 	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(nullptr, gamePath_, GameInfoFlags::PARAM_SFO, nullptr, GameInfoFlags::EMPTY, TaskPriority::LOW);
@@ -715,6 +874,11 @@ public:
 
 	void Draw(UIContext &dc) override;
 	void GetContentDimensions(const UIContext &dc, float &w, float &h) const override {
+		if (xmb_) {
+			w = 400;
+			h = Xmb::RowHeight(xmbFocus_.Value());
+			return;
+		}
 		UI::Button::GetContentDimensions(dc, w, h);
 		if (viewMode_ == GameBrowserViewMode::LARGE_LIST) {
 			h = std::max(h, LARGE_LIST_FOLDER_H * g_Config.fGameGridScale + LARGE_LIST_PAD * 2);
@@ -732,6 +896,9 @@ public:
 	void SetPinned(bool pin) {
 		pinned_ = pin;
 	}
+	void SetXmbStyle(bool xmb) {
+		xmb_ = xmb;
+	}
 
 	std::string DescribeText() const override {
 		return std::string(Button::GetText());  // From Button
@@ -742,6 +909,8 @@ private:
 	GameBrowserViewMode viewMode_;
 	bool absolute_;
 	bool pinned_ = false;
+	bool xmb_ = false;
+	Xmb::FocusAnim xmbFocus_;
 };
 
 void DirButton::Draw(UIContext &dc) {
@@ -754,6 +923,16 @@ void DirButton::Draw(UIContext &dc) {
 	} else if (text == "..") {
 		image = ImageID("I_UP_DIRECTORY");
 		text = "";
+	}
+
+	if (xmb_) {
+		const float focus = xmbFocus_.Update(HasFocus());
+		Xmb::DrawRowGlass(dc, bounds_, focus, down_);
+		const float tile = Xmb::TileSize(focus);
+		Xmb::DrawTile(dc, Bounds(bounds_.x + Xmb::ROW_PAD_LEFT, bounds_.centerY() - tile * 0.5f, tile, tile), Xmb::Hue::Amber, image, "", focus);
+		const float textX = bounds_.x + Xmb::TextX(focus, false);
+		Xmb::DrawRowText(dc, textX, bounds_.centerY(), bounds_.x2() - 20.0f - textX, text.empty() ? std::string_view("..") : text, "", focus);
+		return;
 	}
 
 	Style style = dc.GetTheme().itemStyle;
@@ -848,6 +1027,9 @@ void GameBrowser::SetSearchFilter(const std::string &filter, bool setKeyboardFoc
 }
 
 GameBrowserViewMode GameBrowser::ViewMode() const {
+	if (browseFlags_ & BrowseFlags::XMB) {
+		return GameBrowserViewMode::LARGE_LIST;
+	}
 	if (*viewMode_ < (int)GameBrowserViewMode::GRID || *viewMode_ > (int)GameBrowserViewMode::LARGE_LIST) {
 		return GameBrowserViewMode::GRID;
 	}
@@ -861,6 +1043,29 @@ void GameBrowser::LayoutChange(UI::EventParams &e) {
 
 void GameBrowser::LastClick(UI::EventParams &e) {
 	System_LaunchUrl(LaunchUrlType::BROWSER_URL, lastLink_.c_str());
+}
+
+std::string GameBrowser::FriendlyPath() const {
+	if (path_.GetPath().ToString() == "!RECENT") {
+		return "";
+	}
+	if (path_.GetPath().IsNetworkRoot()) {
+		return std::string(GetI18NCategory(I18NCat::MAINMENU)->T("Network"));
+	}
+	return GetFriendlyPath(path_.GetPath(), aliasMatch_, aliasDisplay_);
+}
+
+bool GameBrowser::CanBrowseForFolder() const {
+#if PPSSPP_PLATFORM(IOS_APP_STORE)
+	return false;
+#else
+	return (browseFlags_ & BrowseFlags::BROWSE) && System_GetPropertyBool(SYSPROP_HAS_FOLDER_BROWSER);
+#endif
+}
+
+void GameBrowser::BrowseForFolder() {
+	UI::EventParams e{};
+	BrowseClick(e);
 }
 
 void GameBrowser::BrowseClick(UI::EventParams &e) {
@@ -1020,6 +1225,7 @@ void GameBrowser::Refresh() {
 	lastScale_ = g_Config.fGameGridScale;
 	lastViewMode_ = ViewMode();
 	const bool gridStyle = lastViewMode_ == GameBrowserViewMode::GRID;
+	const bool xmb = (bool)(browseFlags_ & BrowseFlags::XMB);
 
 	// Kill all the contents
 	Clear();
@@ -1032,6 +1238,10 @@ void GameBrowser::Refresh() {
 
 	LinearLayout *topBar = new LinearLayout(ORIENT_HORIZONTAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, Margins(8, 0, 8, 0)));
 	Add(topBar);
+	if (xmb) {
+		// The XMB layout shows the path in its breadcrumb and puts Browse in its list. Emptied below.
+		topBar->SetVisibility(V_GONE);
+	}
 
 	const bool pathOnSeparateLine = g_display.dp_xres < 1050 || portrait_;
 	// Recent isn't a real folder, so it gets no path or refresh.
@@ -1039,7 +1249,7 @@ void GameBrowser::Refresh() {
 
 	std::string pathStr = path_.GetPath().IsNetworkRoot() ? std::string(mm->T("Network")) : GetFriendlyPath(path_.GetPath(), aliasMatch_, aliasDisplay_);
 
-	if (pathOnSeparateLine && !isRecent) {
+	if (pathOnSeparateLine && !isRecent && !xmb) {
 		Add(new TextView(pathStr, ALIGN_VCENTER | FLAG_WRAP_TEXT, true, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, Margins(8, 0, 8, 0))));
 	}
 	if (browseFlags_ & BrowseFlags::NAVIGATE) {
@@ -1128,12 +1338,16 @@ void GameBrowser::Refresh() {
 	Choice *gridSettingsChoice = topBar->Add(new Choice(ImageID("I_GEAR"), new LayoutParams(64.0f, 64.0f)));
 	gridSettingsChoice->SetRoundCorners(RoundCorners::All);
 	gridSettingsChoice->OnClick.Handle(this, &GameBrowser::GridSettingsClick);
+	if (xmb) {
+		// Hidden views can still take the focus.
+		topBar->Clear();
+	}
 
 	if (gridStyle) {
 		gameList_ = new UI::GridLayoutList(UI::GridLayoutSettings(150 * g_Config.fGameGridScale, 85 * g_Config.fGameGridScale), new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, Margins(10, 0, 6, 0)));
 	} else {
 		UI::LinearLayout *gl = new UI::LinearLayoutList(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT));
-		gl->SetSpacing(4.0f);
+		gl->SetSpacing(xmb ? 0.0f : 4.0f);
 		gameList_ = gl;
 	}
 	Add(gameList_);
@@ -1204,6 +1418,7 @@ void GameBrowser::Refresh() {
 		if (path_.CanNavigateUp()) {
 			upButton = gameList_->Add(new DirButton(Path(".."), lastViewMode_, new UI::LinearLayoutParams(UI::FILL_PARENT, UI::FILL_PARENT)));
 			upButton->OnClick.Handle(this, &GameBrowser::NavigateClick);
+			upButton->SetXmbStyle(xmb);
 		}
 
 		// Add any pinned paths before other directories.
@@ -1212,6 +1427,7 @@ void GameBrowser::Refresh() {
 			DirButton *pinnedDir = gameList_->Add(new DirButton(pinnedPath, pinnedPath.GetFilename(), lastViewMode_, new UI::LinearLayoutParams(UI::FILL_PARENT, UI::FILL_PARENT)));
 			pinnedDir->OnClick.Handle(this, &GameBrowser::NavigateClick);
 			pinnedDir->SetPinned(true);
+			pinnedDir->SetXmbStyle(xmb);
 		}
 	}
 
@@ -1220,6 +1436,7 @@ void GameBrowser::Refresh() {
 	}
 
 	for (size_t i = 0; i < dirButtons.size(); i++) {
+		dirButtons[i]->SetXmbStyle(xmb);
 		gameList_->Add(dirButtons[i])->OnClick.Handle(this, &GameBrowser::NavigateClick);
 		if (!focusPath_.empty() && dirButtons[i]->GetPath() == focusPath_ && dirButtons[i]->SetFocus(FocusFlags::CAUSE_RESTORE)) {
 			UI::ScrollFocusedViewIntoView();
@@ -1227,6 +1444,7 @@ void GameBrowser::Refresh() {
 	}
 
 	for (size_t i = 0; i < gameButtons.size(); i++) {
+		gameButtons[i]->SetXmbStyle(xmb);
 		GameButton *b = gameList_->Add(gameButtons[i]);
 		b->OnClick.Handle(this, &GameBrowser::GameButtonClick);
 		b->OnHoldClick.Handle(this, &GameBrowser::GameButtonHoldClick);
@@ -1250,7 +1468,7 @@ void GameBrowser::Refresh() {
 	}
 
 	// Show a button to toggle pinning at the very end.
-	if ((browseFlags_ & BrowseFlags::PIN) && !path_.GetPath().empty()) {
+	if ((browseFlags_ & BrowseFlags::PIN) && !path_.GetPath().empty() && !xmb) {
 		std::string caption = ""; // IsCurrentPathPinned() ? "-" : "+";
 		if (!gridStyle) {
 			caption = IsCurrentPathPinned() ? mm->T("UnpinPath", "Unpin") : mm->T("PinPath", "Pin");
@@ -1264,7 +1482,7 @@ void GameBrowser::Refresh() {
 		Add(new TextView(mm->T("UseBrowseOrLoad", "Use Browse to choose a folder, or Load to choose a file.")));
 	}
 
-	if (!lastText_.empty()) {
+	if (!lastText_.empty() && !xmb) {
 		Add(new Spacer());
 		Add(new Choice(lastText_, ImageID("I_LINK_OUT"), new UI::LinearLayoutParams(UI::WRAP_CONTENT, UI::WRAP_CONTENT, Margins(10, 0, 0, 10))))->OnClick.Handle(this, &GameBrowser::LastClick);
 	}

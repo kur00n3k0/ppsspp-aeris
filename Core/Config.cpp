@@ -268,7 +268,9 @@ static int DefaultScreenRotation() {
 // All relative to g_Config.
 static constexpr const char *autoLoadSaveStateNames[] = { "Off", "Oldest Save", "Newest Save", "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5" };
 
-static constexpr const char *backgroundAnimationNames[] = { "No animation", "Floating symbols", "Recent games", "Waves", "Moving background", "Bouncing icon", "Colored floating symbols" };
+static constexpr const char *backgroundAnimationNames[] = { "No animation", "Floating symbols", "Recent games", "Waves", "Moving background", "Bouncing icon", "Colored floating symbols", "XMB ribbon" };
+
+static constexpr const char *mainMenuLayoutNames[] = { "Classic", "XMB" };
 
 static constexpr const char *notificationPosNames[] = { "None", "Bottom Left", "Bottom Center", "Bottom Right", "Top Left", "Top Center", "Top Right", "Center Left", "Center Right" };
 
@@ -470,8 +472,10 @@ static constexpr ConfigSetting generalSettings[] = {
 	ConfigSetting("ScreenRotation", SETTING(g_Config, iScreenRotation), &DefaultScreenRotation, CfgFlag::DEFAULT),
 #endif
 
-	ConfigSetting("BackgroundAnimation", SETTING(g_Config, iBackgroundAnimation), (int)BackgroundAnimation::WAVE, CfgFlag::DEFAULT)
+	ConfigSetting("BackgroundAnimation", SETTING(g_Config, iBackgroundAnimation), (int)BackgroundAnimation::XMB_RIBBON, CfgFlag::DEFAULT)
 		.Label(I18NCat::SYSTEM, "UI background animation").Choices(backgroundAnimationNames),
+	ConfigSetting("MainMenuLayout", SETTING(g_Config, iMainMenuLayout), (int)MainMenuLayout::XMB, CfgFlag::DEFAULT)
+		.Label(I18NCat::SYSTEM, "Main menu layout").Choices(mainMenuLayoutNames),
 	ConfigSetting("TransparentBackground", SETTING(g_Config, bTransparentBackground), true, CfgFlag::DEFAULT)
 		.Label(I18NCat::SYSTEM, "Transparent UI background"),
 	ConfigSetting("UITint", SETTING(g_Config, fUITint), 0.0, CfgFlag::DEFAULT)
@@ -1542,7 +1546,7 @@ static constexpr ConfigSetting upgradeSettings[] = {
 };
 
 static constexpr ConfigSetting themeSettings[] = {
-	ConfigSetting("ThemeName", SETTING(g_Config, sThemeName), "Default", CfgFlag::DEFAULT),
+	ConfigSetting("ThemeName", SETTING(g_Config, sThemeName), "AERIS Aqua", CfgFlag::DEFAULT),
 };
 
 static constexpr ConfigSetting vrSettings[] = {

@@ -122,7 +122,7 @@ void DrawBuffer::MultiVGradient(float x, float y, float w, float h, const Gradie
 	for (int i = 0; i < numStops - 1; i++) {
 		float t0 = stops[i].t, t1 = stops[i+1].t;
 		uint32_t c0 = stops[i].color, c1 = stops[i+1].color;
-		RectVGradient(x, y + h * t0, x + w, y + h * (t1 - t0), c0, c1);
+		RectVGradient(x, y + h * t0, x + w, y + h * t1, c0, c1);
 	}
 }
 
@@ -510,6 +510,66 @@ void DrawBuffer::DrawRoundRect(float x1, float y1, float x2, float y2, float rad
 				}
 			}
 			DrawTexRect(xs[x], ys[y], xs[x + 1], ys[y + 1], us[x], vs[y], us[x + 1], vs[y + 1], color);
+		}
+	}
+}
+
+void DrawBuffer::DrawRoundRectVGradient(float x1, float y1, float x2, float y2, float radius, Color colorTop, Color colorBottom) {
+	if (colorTop == colorBottom) {
+		DrawRoundRect(x1, y1, x2, y2, radius, colorTop);
+		return;
+	}
+	if (!atlas || x2 <= x1 || y2 <= y1) {
+		return;
+	}
+	// The same cells as DrawRoundRect, with the colors of each row of vertices interpolated.
+	int radiusIndex = 0;
+	for (int i = 1; i < ROUND_RECT_RADIUS_COUNT; i++) {
+		if (fabsf(ROUND_RECT_RADII[i] - radius) < fabsf(ROUND_RECT_RADII[radiusIndex] - radius)) {
+			radiusIndex = i;
+		}
+	}
+	const AtlasImage *image = atlas->getImage(ImageID(RoundRectCornerImageName(radiusIndex, RoundRectStyle::Filled)));
+	if (!image) {
+		return;
+	}
+	const float dpiScale = atlas->dpiScale;
+	const float r = ROUND_RECT_RADII[radiusIndex] * dpiScale;
+	const int center = RoundRectCornerCenter(r);
+	float scale = std::max(radius, 0.0f) / ROUND_RECT_RADII[radiusIndex];
+	scale = std::min(scale, std::min(x2 - x1, y2 - y1) * dpiScale / (2.0f * (r + 0.5f)));
+	if (scale <= 0.0f) {
+		return;
+	}
+	const float texel = scale / dpiScale;
+	const float outside = (center - r - 0.5f) * texel;
+	const float inside = (r + 0.5f) * texel;
+
+	const float xs[4] = { x1 - outside, x1 + inside, x2 - inside, x2 + outside };
+	const float ys[4] = { y1 - outside, y1 + inside, y2 - inside, y2 + outside };
+	const float us[4] = { image->u1, image->u2, image->u2, image->u1 };
+	const float vs[4] = { image->v1, image->v2, image->v2, image->v1 };
+	Color colors[4];
+	for (int i = 0; i < 4; i++) {
+		const float t = std::clamp((ys[i] - y1) / (y2 - y1), 0.0f, 1.0f);
+		colors[i] = colorBlend(colorBottom, colorTop, t);
+	}
+
+	for (int y = 0; y < 3; y++) {
+		if (ys[y + 1] <= ys[y]) {
+			continue;
+		}
+		const Color c1 = colors[y], c2 = colors[y + 1];
+		for (int x = 0; x < 3; x++) {
+			if (xs[x + 1] <= xs[x]) {
+				continue;
+			}
+			V(xs[x], ys[y], c1, us[x], vs[y]);
+			V(xs[x + 1], ys[y], c1, us[x + 1], vs[y]);
+			V(xs[x + 1], ys[y + 1], c2, us[x + 1], vs[y + 1]);
+			V(xs[x], ys[y], c1, us[x], vs[y]);
+			V(xs[x + 1], ys[y + 1], c2, us[x + 1], vs[y + 1]);
+			V(xs[x], ys[y + 1], c2, us[x], vs[y + 1]);
 		}
 	}
 }

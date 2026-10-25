@@ -322,6 +322,10 @@ bool IsTabRightKey(const KeyInput &key) {
 	return MatchesKeyDef(tabRightKeys, key);
 }
 
+bool IsQuickActionKey(const KeyInput &key) {
+	return MatchesKeyDef(quickActionKeys, key);
+}
+
 bool Clickable::Key(const KeyInput &key) {
 	if (!HasFocus() && key.deviceId != DEVICE_ID_MOUSE) {
 		down_ = false;

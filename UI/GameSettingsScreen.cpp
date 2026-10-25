@@ -333,6 +333,8 @@ void GameSettingsScreen::BuildSystemSettings(SettingsPage *page) {
 	page->Setting(&g_Config.iNotificationPos);
 
 	page->Setting(&g_Config.iBackgroundAnimation);
+	// The main screen rebuilds itself when it sees the change.
+	page->Setting(&g_Config.iMainMenuLayout);
 
 	page->Custom("Theme", [this](UI::ViewGroup *parent) -> UI::View * {
 		PopupMultiChoiceDynamic *theme = parent->Add(new PopupMultiChoiceDynamic(&g_Config.sThemeName, T(I18NCat::SYSTEM, "Theme"), GetThemeInfoNames(), I18NCat::THEMES, screenManager()));

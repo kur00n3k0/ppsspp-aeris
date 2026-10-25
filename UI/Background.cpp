@@ -356,6 +356,193 @@ private:
 	}
 };
 
+// The AERIS XMB background: a vertical gradient with a sky glow and a corner glow, a faded grid, and the
+// ribbon (two glow bands and three bundles of lines fanned around their master curves) with sparkles
+// drifting over it. The curves reproduce the mockup's, with u running 0 to 1 across the screen.
+class XmbRibbonAnimation : public Animation {
+	static constexpr double TWO_PI = 6.283185307179586;
+
+public:
+	void Draw(UIContext &dc, double t, float alpha, Lin::Vec3 focus) override {
+		const Bounds b = dc.GetBounds();
+		const UI::Theme &theme = dc.GetTheme();
+		const uint32_t accent = theme.xmbAccent;
+		const uint32_t accent2 = theme.xmbAccent2;
+
+		// A custom background image replaces the gradient, the glows and the grid.
+		const bool drawBase = bgTexture == nullptr;
+
+		dc.Flush();
+		dc.BeginNoTex();
+		if (drawBase) {
+			const GradientStop stops[3] = {
+				{ 0.0f, alphaMul(theme.xmbBgTop, alpha) },
+				{ 0.46f, alphaMul(theme.backgroundColor | 0xFF000000, alpha) },
+				{ 1.0f, alphaMul(theme.xmbBgBottom, alpha) },
+			};
+			dc.Draw()->MultiVGradient(b.x, b.y, b.w, b.h, stops, 3);
+		}
+		dc.Flush();
+
+		dc.Begin();
+		if (drawBase) {
+			const ImageID glow("I_XMB_GLOW");
+			const uint32_t sky = colorBlend(0xFFFFFFFF, accent, 0.45f);
+			// Corner glow, bottom left.
+			DrawGlow(dc, glow, b.x + 0.04f * b.w, b.y + 1.12f * b.h, 0.70f * b.w, 0.75f * b.h, colorAlpha(accent2, 0.55f * alpha));
+			// Sky, top right.
+			DrawGlow(dc, glow, b.x + 0.78f * b.w, b.y - 0.12f * b.h, 0.78f * b.w, 0.79f * b.h, colorAlpha(sky, 0.38f * alpha));
+			// Sun.
+			const float sun = 0.3f * std::max(b.w, b.h * 1.76f);
+			DrawGlow(dc, glow, b.x + 0.875f * b.w, b.y - 0.05f * b.h, sun, sun, whiteAlpha(0.55f * alpha));
+		}
+		dc.Flush();
+
+		dc.BeginNoTex();
+		if (drawBase) {
+			DrawGrid(dc, b, alpha);
+		}
+		DrawRibbon(dc, b, t, alpha, accent);
+		dc.Flush();
+
+		dc.Begin();
+		DrawSparks(dc, b, t, alpha);
+		dc.Flush();
+	}
+
+private:
+	struct Bundle {
+		float base, a1, a2, phase;
+		double period;
+		int lines;
+		float spacing;
+		float master;  // Alpha of the master line.
+		float strength;  // Of the other lines.
+
+		// The lines alternate above and below the master curve, swinging wider the further out they are.
+		float Fan(int i) const { return 1.0f + 0.02f * ((i + 1) / 2) * (i % 2 ? 1.0f : -1.0f) * i; }
+		float Alpha(int i) const { return i == 0 ? master : strength * std::max(0.08f, 0.42f - 0.025f * i); }
+	};
+
+	static float Ribbon(float u, float base, float a1, float a2, float p, double t, double period) {
+		const float w = (float)(t * TWO_PI / period);
+		return base + a1 * sinf(0.751f + 5.409f * u + p + w) + a2 * sinf(1.571f + 11.31f * u + 1.7f * p - w);
+	}
+
+	static void DrawGlow(UIContext &dc, ImageID glow, float cx, float cy, float w, float h, uint32_t color) {
+		dc.Draw()->DrawImageStretch(glow, cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f, color);
+	}
+
+	// 48 dp lines, faded out by an ellipse around the upper middle of the screen.
+	static void DrawGrid(UIContext &dc, const Bounds &b, float alpha) {
+		constexpr float spacing = 48.0f;
+		constexpr float seg = 24.0f;
+		const float lineW = g_display.pixel_in_dps_x;
+		auto mask = [&](float x, float y) {
+			const float dx = (x - (b.x + b.w * 0.5f)) / (b.w * 0.7f);
+			const float dy = (y - (b.y + b.h * 0.4f)) / (b.h * 0.6f);
+			const float d = sqrtf(dx * dx + dy * dy);
+			return std::clamp((0.8f - d) / 0.6f, 0.0f, 1.0f);
+		};
+		const float a = 0.045f * alpha;
+		for (float x = b.x; x < b.x2(); x += spacing) {
+			for (float y = b.y; y < b.y2(); y += seg) {
+				const float m0 = mask(x, y), m1 = mask(x, y + seg);
+				if (m0 > 0.0f || m1 > 0.0f) {
+					dc.Draw()->RectVGradient(x, y, x + lineW, y + seg, whiteAlpha(a * m0), whiteAlpha(a * m1));
+				}
+			}
+		}
+		for (float y = b.y; y < b.y2(); y += spacing) {
+			for (float x = b.x; x < b.x2(); x += seg) {
+				const float m = mask(x + seg * 0.5f, y);
+				if (m > 0.0f) {
+					dc.Draw()->Rect(x, y, seg, g_display.pixel_in_dps_y, whiteAlpha(a * m));
+				}
+			}
+		}
+		dc.Flush();
+	}
+
+	static void DrawRibbon(UIContext &dc, const Bounds &b, double t, float alpha, uint32_t accent) {
+		// base, a1, a2, phase, period (s), lines, spacing (fraction of the height), master alpha, strength
+		static constexpr Bundle bundles[] = {
+			{0.735f, 0.061f, 0.027f, 0.0f, 22.0, 10, 0.0037f, 0.8f, 1.0f},
+			{0.754f, 0.049f, 0.032f, 1.3f, 28.0, 7, 0.0049f, 0.5f, 0.65f},
+			{0.790f, 0.039f, 0.020f, 2.6f, 34.0, 5, 0.0061f, 0.38f, 0.5f},
+		};
+		const int steps = std::clamp((int)g_display.dp_xres / 3, 20, 500);
+		const float step = b.w / steps;
+		const float px = g_display.pixel_in_dps_y;
+		const uint32_t bandA = colorAlpha(accent, 0.28f * alpha);
+		const uint32_t bandB = whiteAlpha(0.12f * alpha);
+		for (int n = 0; n < steps; n++) {
+			const float x = b.x + n * step;
+			const float u = (n + 0.5f) / steps;
+			const float edge = std::min(1.0f, std::min(u, 1.0f - u) * 3.3f);
+			// Glow bands.
+			const float yA = Ribbon(u, 0.735f, 0.056f, 0.027f, 0.0f, t, 26.0);
+			const float yB = Ribbon(u, 0.797f, 0.047f, 0.022f, 2.1f, t, 34.0);
+			dc.Draw()->RectVGradient(x, b.y + yA * b.h, x + step, b.y2(), bandA, 0);
+			dc.Draw()->RectVGradient(x, b.y + yB * b.h, x + step, b.y2(), bandB, 0);
+			for (const Bundle &k : bundles) {
+				const float y0 = Ribbon(u, k.base, k.a1, k.a2, k.phase, t, k.period);
+				for (int i = 0; i < k.lines; i++) {
+					const float y = k.base + (y0 - k.base) * k.Fan(i) + i * k.spacing;
+					const float thickness = i == 0 ? 2.0f * px : px;
+					dc.Draw()->Rect(x, b.y + y * b.h, step, thickness, whiteAlpha(k.Alpha(i) * edge * alpha));
+				}
+			}
+			// 24 rects of 6 vertices per column, so flush well before the buffer fills.
+			if ((n & 127) == 127) {
+				dc.Flush();
+			}
+		}
+	}
+
+	void DrawSparks(UIContext &dc, const Bounds &b, double t, float alpha) {
+		if (sparks_.empty()) {
+			GMRng rng;
+			rng.Init(0x5EA5);
+			sparks_.resize(36);
+			static const float sizes[] = { 1.2f, 1.6f, 2.0f, 2.4f, 3.0f, 4.2f, 5.5f };
+			for (Spark &s : sparks_) {
+				s.u = rng.F();
+				s.v = 0.58f + rng.F() * 0.30f;
+				s.radius = sizes[rng.R32() % ARRAY_SIZE(sizes)];
+				const float dir = (rng.R32() & 1) ? 1.0f : -1.0f;
+				s.dx = dir * (60.0f + rng.F() * 120.0f);
+				s.dy = -rng.F() * 38.0f;
+				s.driftPeriod = 9.0f + rng.F() * 11.0f;
+				s.twinklePeriod = 2.5f + rng.F() * 3.5f;
+				s.phase = rng.F();
+			}
+		}
+		const ImageID spark("I_XMB_SPARK");
+		const AtlasImage *img = dc.Draw()->GetAtlas()->getImage(spark);
+		if (!img) {
+			return;
+		}
+		for (const Spark &s : sparks_) {
+			const float drift = 0.5f - 0.5f * cosf((float)(TWO_PI * (t / s.driftPeriod + s.phase)));
+			const float x = b.x + s.u * b.w + s.dx * drift;
+			const float y = b.y + s.v * b.h + s.dy * drift;
+			// Keyframes 0, 1, 0.25, 0.9, 0.
+			static const float keys[] = { 0.0f, 1.0f, 0.25f, 0.9f, 0.0f };
+			const float f = (float)fmod(t / s.twinklePeriod + s.phase * 3.0, 1.0) * 4.0f;
+			const int k = std::min(3, (int)f);
+			const float a = keys[k] + (keys[k + 1] - keys[k]) * (f - k);
+			const float scale = s.radius * 2.0f / img->w;
+			dc.Draw()->DrawImage(spark, x, y, scale, whiteAlpha(a * alpha), ALIGN_CENTER);
+		}
+	}
+
+	struct Spark {
+		float u, v, radius, dx, dy, driftPeriod, twinklePeriod, phase;
+	};
+	std::vector<Spark> sparks_;
+};
+
 // TODO: Add more styles. Remember to add to the enum in ConfigValues.h and the selector in GameSettings too.
 
 static BackgroundAnimation g_CurBackgroundAnimation = BackgroundAnimation::OFF;
@@ -407,6 +594,9 @@ void DrawBackground(UIContext &dc, float alpha, Lin::Vec3 focus) {
 			break;
 		case BackgroundAnimation::FLOATING_SYMBOLS_COLORED:
 			g_Animation.reset(new FloatingSymbolsAnimation(true));
+			break;
+		case BackgroundAnimation::XMB_RIBBON:
+			g_Animation.reset(new XmbRibbonAnimation());
 			break;
 		default:
 			g_Animation.reset(nullptr);

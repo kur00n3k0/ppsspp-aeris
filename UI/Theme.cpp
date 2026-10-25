@@ -21,6 +21,7 @@
 
 #include "UI/Theme.h"
 
+#include "Common/Data/Color/RGBAUtil.h"
 #include "Common/Data/Format/IniFile.h"
 #include "Common/File/DirListing.h"
 #include "Common/Log/LogManager.h"
@@ -61,6 +62,12 @@ struct ThemeInfo {
 	uint32_t uScrollbarColor = 0x80FFFFFF;
 	uint32_t uPopupSliderColor = 0xFFFFFFFF;
 	uint32_t uPopupSliderFocusedColor = 0xFFEDC24C;
+
+	// 0 = not set, derived in UpdateTheme().
+	uint32_t uXmbAccent = 0;
+	uint32_t uXmbAccent2 = 0;
+	uint32_t uXmbBgTop = 0;
+	uint32_t uXmbBgBottom = 0;
 
 	bool operator == (const std::string &other) {
 		return name == other;
@@ -160,6 +167,10 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 				section.Get("ScrollbarColor", &info.uScrollbarColor);
 				section.Get("PopupSliderColor", &info.uPopupSliderColor);
 				section.Get("PopupSliderFocusedColor", &info.uPopupSliderFocusedColor);
+				section.Get("XmbAccent", &info.uXmbAccent);
+				section.Get("XmbAccent2", &info.uXmbAccent2);
+				section.Get("XmbBgTop", &info.uXmbBgTop);
+				section.Get("XmbBgBottom", &info.uXmbBgBottom);
 
 				appendTheme(info);
 			}
@@ -246,6 +257,13 @@ void UpdateTheme() {
 
 	ui_theme.popupSliderColor = themeInfo.uPopupSliderColor;
 	ui_theme.popupSliderFocusedColor = themeInfo.uPopupSliderFocusedColor;
+
+	// The fallbacks keep older themes looking like themselves in the XMB layout.
+	const uint32_t opaqueBg = themeInfo.uBackgroundColor | 0xFF000000;
+	ui_theme.xmbAccent = themeInfo.uXmbAccent ? themeInfo.uXmbAccent : (themeInfo.uItemFocusedStyleBg | 0xFF000000);
+	ui_theme.xmbAccent2 = themeInfo.uXmbAccent2 ? themeInfo.uXmbAccent2 : (themeInfo.uItemDownStyleBg | 0xFF000000);
+	ui_theme.xmbBgTop = themeInfo.uXmbBgTop ? themeInfo.uXmbBgTop : colorBlend(0xFFFFFFFF, opaqueBg, 0.12f);
+	ui_theme.xmbBgBottom = themeInfo.uXmbBgBottom ? themeInfo.uXmbBgBottom : colorBlend(0xFF000000, opaqueBg, 0.55f);
 }
 
 const UI::Theme *GetTheme() {

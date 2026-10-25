@@ -120,6 +120,13 @@ struct Theme {
 	uint32_t popupSliderColor;
 	uint32_t popupSliderFocusedColor;
 
+	// For the XMB layout and its ribbon background. Themes without them get them from the item and
+	// background colors.
+	uint32_t xmbAccent;
+	uint32_t xmbAccent2;
+	uint32_t xmbBgTop;
+	uint32_t xmbBgBottom;
+
 	// TODO: Should it be here?
 	float choiceRoundRadius = 16.0f;
 };
@@ -1263,6 +1270,8 @@ bool IsEscapeKey(const KeyInput &key);
 bool IsInfoKey(const KeyInput &key);
 bool IsTabLeftKey(const KeyInput &key);
 bool IsTabRightKey(const KeyInput &key);
+// Corresponds to Select. Opens the quick actions in the XMB layout.
+bool IsQuickActionKey(const KeyInput &key);
 
 // TODO: Doesn't really belong here.
 void DrawIconShine(UIContext &dc, const Bounds &bounds, float shine, bool animated);

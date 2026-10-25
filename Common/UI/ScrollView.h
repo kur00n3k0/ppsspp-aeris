@@ -54,6 +54,11 @@ public:
 		shadows_ = shadows;
 	}
 
+	// Without one, the view can still be scrolled by dragging its contents.
+	void SetScrollbar(bool scrollbar) {
+		scrollbar_ = scrollbar;
+	}
+
 	NeighborResult FindScrollNeighbor(View *view, const Point2D &target, FocusMove direction, NeighborResult best) override;
 
 private:
@@ -95,6 +100,7 @@ private:
 	bool mouseHover_ = false;
 	bool bobHover_ = false;  // Mouse is over the strip the bob moves in.
 	bool shadows_ = true;
+	bool scrollbar_ = true;
 
 	// The bob fades out when the scroll view is left alone.
 	float bobAlpha_ = 1.0f;

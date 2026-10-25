@@ -55,6 +55,8 @@ list(APPEND UISource
 	MiscScreens.cpp
 	MiscViews.h
 	MiscViews.cpp
+	XmbViews.h
+	XmbViews.cpp
 	PauseScreen.h
 	PauseScreen.cpp
 	SimpleDialogScreen.h

@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "Common/File/Path.h"
@@ -38,12 +40,23 @@ Atlas *GetUIAtlas() {
 	return &ui_atlas;
 }
 
+// Images drawn here rather than loaded. All white, for tinting when drawn.
+enum class ImageGen : uint8_t {
+	None,
+	XmbOrb,  // The glass orb of the selected XMB category.
+	XmbOrbHighlight,  // Its rim, top highlight and bottom reflection, drawn over it untinted.
+	XmbGlow,  // A soft round blob, stretched for glows and shadows.
+	XmbSpark,  // A small dot with a soft falloff.
+};
+
 struct ImageMeta {
 	std::string_view id;
 	bool addShadow = false;
 	// If set, the image is a generated round rect corner (see DrawBuffer::DrawRoundRect). In UI units.
 	float cornerRadius = 0.0f;
 	float cornerThickness = 0.0f;  // 0 = filled
+	ImageGen gen = ImageGen::None;
+	float genSize = 0.0f;  // In UI units.
 };
 
 // We add shadows to all line-art images that are used for buttons, to improve visibility.
@@ -206,6 +219,11 @@ static const ImageMeta g_uiImageIDs[] = {
 	{"I_ARCHIVE_RAR", false},
 	{"I_DOWNLOAD", false},
 	{"I_NETWORK", false},
+	{"I_XMB_RECENT", false},
+	{"I_XMB_ORB", false, 0.0f, 0.0f, ImageGen::XmbOrb, 108.0f},
+	{"I_XMB_ORB_HL", false, 0.0f, 0.0f, ImageGen::XmbOrbHighlight, 108.0f},
+	{"I_XMB_GLOW", false, 0.0f, 0.0f, ImageGen::XmbGlow, 128.0f},
+	{"I_XMB_SPARK", false, 0.0f, 0.0f, ImageGen::XmbSpark, 16.0f},
 };
 
 static std::string PNGNameFromID(std::string_view id) {
@@ -404,6 +422,105 @@ static void GenerateRoundRectCorner(Image &img, float radius, float thickness, f
 	}
 }
 
+static float Smoothstep(float edge0, float edge1, float x) {
+	const float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
+}
+
+// Linear between (t, value) stops, sorted by t.
+static float RampValue(const float (*stops)[2], int count, float t) {
+	if (t <= stops[0][0]) {
+		return stops[0][1];
+	}
+	for (int i = 1; i < count; i++) {
+		if (t <= stops[i][0]) {
+			const float f = (t - stops[i - 1][0]) / (stops[i][0] - stops[i - 1][0]);
+			return stops[i - 1][1] + (stops[i][1] - stops[i - 1][1]) * f;
+		}
+	}
+	return stops[count - 1][1];
+}
+
+// Alpha of a filled ellipse (center cx, cy, semi-axes rx, ry, rotated by angle) with a soft edge, at (x, y).
+static float EllipseCoverage(float x, float y, float cx, float cy, float rx, float ry, float angle, float *localY) {
+	const float c = cosf(angle), s = sinf(angle);
+	const float dx = x - cx, dy = y - cy;
+	const float lx = (dx * c + dy * s) / rx;
+	const float ly = (-dx * s + dy * c) / ry;
+	if (localY) {
+		*localY = ly;
+	}
+	return 1.0f - Smoothstep(0.8f, 1.0f, sqrtf(lx * lx + ly * ly));
+}
+
+// The XMB sprites, after the CSS of the AERIS mockup. Coordinates are 0..1 across the image.
+static void GenerateXmbImage(Image &img, ImageGen gen, float sizeDp, float dpiScale) {
+	const int size = std::max(4, (int)ceilf(sizeDp * dpiScale));
+	img.resize(size, size);
+	img.scale = dpiScale;
+	const float px = 1.0f / size;  // One pixel, in image units.
+	const float radiusDp = sizeDp * 0.5f;
+	for (int yi = 0; yi < size; yi++) {
+		const float y = (yi + 0.5f) * px;
+		for (int xi = 0; xi < size; xi++) {
+			const float x = (xi + 0.5f) * px;
+			const float dx = x - 0.5f, dy = y - 0.5f;
+			const float r = sqrtf(dx * dx + dy * dy) * 2.0f;  // 1 at the rim.
+			float a = 0.0f;
+			switch (gen) {
+			case ImageGen::XmbOrb:
+			{
+				// radial-gradient(circle at 35% 28%, ...) plus the inner glow along the bottom.
+				static const float body[][2] = { { 0.0f, 0.30f }, { 0.38f, 0.16f }, { 0.70f, 0.14f }, { 1.0f, 0.20f } };
+				const float bx = x - 0.35f, by = y - 0.28f;
+				float fill = RampValue(body, 4, sqrtf(bx * bx + by * by) / 0.97f);
+				const float edgeDp = (1.0f - r) * radiusDp;
+				const float bottomGlow = 0.30f * expf(-edgeDp / 9.0f) * std::clamp((y - 0.45f) * 2.2f, 0.0f, 1.0f);
+				fill = 1.0f - (1.0f - fill) * (1.0f - bottomGlow);
+				const float coverage = std::clamp((1.0f - r) * size * 0.5f + 0.5f, 0.0f, 1.0f);
+				a = fill * coverage;
+				break;
+			}
+			case ImageGen::XmbOrbHighlight:
+			{
+				const float edgeDp = (1.0f - r) * radiusDp;
+				const float coverage = std::clamp((1.0f - r) * size * 0.5f + 0.5f, 0.0f, 1.0f);
+				// 1 dp rim.
+				float rim = 0.35f * std::clamp(1.5f - fabsf(edgeDp - 0.5f) * dpiScale, 0.0f, 1.0f);
+				// Inset glow along the top.
+				const float topGlow = 0.35f * expf(-edgeDp / 7.0f) * std::clamp((0.55f - y) * 2.2f, 0.0f, 1.0f);
+				// The specular highlight, fading out downwards.
+				float ly = 0.0f;
+				const float spec = EllipseCoverage(x, y, 0.37f, 0.20f, 0.19f, 0.10f, -24.0f * 3.14159265f / 180.0f, &ly);
+				const float specA = 0.85f * spec * std::clamp(0.5f - ly * 0.5f, 0.0f, 1.0f);
+				// The reflection at the bottom right.
+				const float rx = (x - 0.69f) / 0.15f, ry = (y - 0.85f) / 0.06f;
+				const float refl = 0.65f * (1.0f - Smoothstep(0.0f, 0.7f, sqrtf(rx * rx + ry * ry)));
+				a = 1.0f - (1.0f - rim) * (1.0f - topGlow) * (1.0f - specA) * (1.0f - refl);
+				a *= coverage;
+				break;
+			}
+			case ImageGen::XmbGlow:
+			{
+				const float f = 1.0f - Smoothstep(0.0f, 1.0f, r);
+				a = f * f;
+				break;
+			}
+			case ImageGen::XmbSpark:
+			{
+				static const float spark[][2] = { { 0.0f, 1.0f }, { 0.35f, 0.55f }, { 1.0f, 0.0f } };
+				a = RampValue(spark, 3, r);
+				break;
+			}
+			default:
+				break;
+			}
+			const u32 a8 = (u32)(std::clamp(a, 0.0f, 1.0f) * 255.0f + 0.5f);
+			img.set1(xi, yi, a8 * 0x01010101);
+		}
+	}
+}
+
 static bool GenerateUIAtlasImage(Atlas *atlas, float dpiScale, Image *dest, int maxTextureSize, const ImageMeta *imageIDs, size_t imageCount) {
 	Bucket bucket;
 
@@ -476,6 +593,8 @@ static bool GenerateUIAtlasImage(Atlas *atlas, float dpiScale, Image *dest, int 
 			img.fill(0);
 		} else if (imageIDs[i].cornerRadius > 0.0f) {
 			GenerateRoundRectCorner(img, imageIDs[i].cornerRadius, imageIDs[i].cornerThickness, dpiScale);
+		} else if (imageIDs[i].gen != ImageGen::None) {
+			GenerateXmbImage(img, imageIDs[i].gen, imageIDs[i].genSize, dpiScale);
 		} else {
 			std::string name = "ui_images/";
 			std::string pngName = PNGNameFromID(imageIDs[i].id);
