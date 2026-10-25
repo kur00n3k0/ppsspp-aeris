@@ -931,6 +931,16 @@ void MainScreen::SetXmbPane(int index, bool animate) {
 		if (focused && prev.scroll->ContainsSubview(focused) && !IsFocusMovementEnabled()) {
 			SetFocusedView(nullptr, FocusFlags::CAUSE_FOCUS_MOVE);
 		}
+		// The game's music and background belong to its row. A game focused in the new category
+		// starts its own below.
+		for (auto &highlight : highlightedBackgrounds_) {
+			if (highlight.endTime < 0.0) {
+				highlight.endTime = time_now_d();
+			}
+		}
+		highlightedGamePath_.clear();
+		lockBackgroundAudio_ = false;
+		g_BackgroundAudio.SetGame(Path());
 	}
 
 	pane.scroll->SetVisibility(V_VISIBLE);
