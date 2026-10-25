@@ -1038,6 +1038,7 @@ LOCAL_SRC_FILES := \
   $(SRC)/UI/IAPScreen.cpp \
   $(SRC)/UI/MiscScreens.cpp \
   $(SRC)/UI/MiscViews.cpp \
+  $(SRC)/UI/XmbViews.cpp \
   $(SRC)/UI/RemoteISOScreen.cpp \
   $(SRC)/UI/ReportScreen.cpp \
   $(SRC)/UI/PauseScreen.cpp \

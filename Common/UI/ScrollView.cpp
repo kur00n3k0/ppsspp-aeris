@@ -275,7 +275,7 @@ float ScrollView::ScrollMax() const {
 
 ScrollView::Bob ScrollView::ComputeBob() const {
 	Bob bob{};
-	if (views_.empty()) {
+	if (views_.empty() || !scrollbar_) {
 		return bob;
 	}
 	const float childHeight = ChildSize();

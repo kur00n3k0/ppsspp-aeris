@@ -233,6 +233,12 @@ enum class BackgroundAnimation {
 	MOVING_BACKGROUND = 4,
 	BOUNCING_ICON = 5,
 	FLOATING_SYMBOLS_COLORED = 6,
+	XMB_RIBBON = 7,
+};
+
+enum class MainMenuLayout {
+	CLASSIC = 0,
+	XMB = 1,
 };
 
 // iOS only

@@ -32,6 +32,12 @@
 
 class RemoteISOBrowseScreen;
 
+namespace Xmb {
+class CategoryBar;
+class TopBar;
+class List;
+}
+
 struct HighlightedBackground {
 	Path gamePath;
 	double startTime;
@@ -57,6 +63,8 @@ protected:
 	ViewLayoutMode LayoutMode() const override { return ViewLayoutMode::IgnoreBottomInset; }
 
 	void CreateViews() override;
+	void CreateClassicViews();
+	void CreateNoticeBars();
 	void CreateRecentTab();
 	GameBrowser *CreateBrowserTab(const Path &path, std::string_view title, std::string_view howToTitle, std::string_view howToUri, BrowseFlags browseFlags, int *viewMode, float *scrollPos);
 	void CreateMainButtons(UI::LinearLayout *parent, bool vertical);
@@ -99,6 +107,45 @@ protected:
 	friend class RemoteISOBrowseScreen;
 private:
 	void InstantHighlight(const Path &path);
+
+	// The XMB layout: a row of categories over one list of items at a time.
+	enum class XmbCategory {
+		SETTINGS,
+		RECENT,
+		GAMES,
+		HOMEBREW,
+		SAVED_DATA,
+		NETWORK,
+		PPSSPP,
+	};
+	struct XmbPane {
+		XmbCategory category;
+		std::string label;
+		std::string crumb;  // Shown when the browser has no path.
+		UI::ScrollView *scroll = nullptr;
+		UI::ViewGroup *content = nullptr;
+		GameBrowser *browser = nullptr;
+		Xmb::List *list = nullptr;  // Searchable items, in panes without a browser.
+		UI::View *lastFocus = nullptr;  // Only compared, it may be gone.
+	};
+
+	bool UseXmbLayout() const;
+	void CreateXmbViews();
+	void SetXmbPane(int pane, bool animate);
+	void UpdateXmb();
+	bool XmbKey(const KeyInput &key);
+	void ShowQuickActions();
+
+	int builtLayout_ = -1;  // The g_Config.iMainMenuLayout the views were made for.
+	bool xmbLayout_ = false;
+	std::vector<XmbPane> xmbPanes_;
+	int xmbPane_ = 0;
+	Xmb::CategoryBar *xmbCategoryBar_ = nullptr;
+	Xmb::TopBar *xmbTopBar_ = nullptr;
+	UI::ViewGroup *xmbPaneHolder_ = nullptr;
+	float xmbScrollTarget_ = -1.0f;
+	// Which category to show, kept while the views are recreated and the screen is gone.
+	static int xmbCategory_;
 };
 
 class UmdReplaceScreen : public UIBaseDialogScreen {

@@ -52,6 +52,13 @@
 #include "UI/InstallPkgScreen.h"
 #include "UI/Background.h"
 #include "UI/GameBrowser.h"
+#include "UI/AdhocServerScreen.h"
+#include "UI/Store.h"
+#include "UI/XmbViews.h"
+#include "Common/Math/curves.h"
+#include "Common/System/Display.h"
+#include "Common/UI/ScrollView.h"
+#include "Common/UI/Tween.h"
 #include "Core/Config.h"
 #include "Core/Loaders.h"
 #include "Common/Data/Text/I18n.h"
@@ -61,6 +68,17 @@
 #include "Core/Util/PSARUnpack.h"
 
 bool MainScreen::showHomebrewTab = false;
+int MainScreen::xmbCategory_ = -1;
+
+static void SaveConfigAndExit() {
+	// Let's make sure the config was saved, since it may not have been.
+	if (!g_Config.Save("MainScreen::OnExit")) {
+		System_Toast("Failed to save settings!\nCheck permissions, or try to restart the device.");
+	}
+	UpdateUIState(UISTATE_EXIT);
+	// Request the framework to exit cleanly.
+	System_ExitApp();
+}
 
 static void LaunchInEmuScreen(ScreenManager *screenManager, Screen *currentScreen, EmuScreen *emuScreen) {
 	if (currentScreen) {
@@ -401,13 +419,7 @@ void MainScreen::CreateMainButtons(UI::LinearLayout *parent, bool portrait) {
 #if !PPSSPP_PLATFORM(IOS_APP_STORE)
 		Choice *exitButton = buttons->Add(new Choice(di->T("Exit")));
 		exitButton->OnClick.Add([](UI::EventParams &e) {
-			// Let's make sure the config was saved, since it may not have been.
-			if (!g_Config.Save("MainScreen::OnExit")) {
-				System_Toast("Failed to save settings!\nCheck permissions, or try to restart the device.");
-			}
-			UpdateUIState(UISTATE_EXIT);
-			// Request the framework to exit cleanly.
-			System_ExitApp();
+			SaveConfigAndExit();
 		});
 		exitButton->SetRoundCorners(RoundCorners::All);
 #endif
@@ -415,6 +427,22 @@ void MainScreen::CreateMainButtons(UI::LinearLayout *parent, bool portrait) {
 }
 
 void MainScreen::CreateViews() {
+	builtLayout_ = g_Config.iMainMenuLayout;
+	if (UseXmbLayout()) {
+		CreateXmbViews();
+	} else {
+		CreateClassicViews();
+	}
+	CreateNoticeBars();
+}
+
+void MainScreen::CreateClassicViews() {
+	xmbLayout_ = false;
+	xmbPanes_.clear();
+	xmbCategoryBar_ = nullptr;
+	xmbTopBar_ = nullptr;
+	xmbPaneHolder_ = nullptr;
+
 	// Information in the top left.
 	// Back button to the bottom left.
 	// Scrolling action menu to the right.
@@ -565,6 +593,10 @@ void MainScreen::CreateViews() {
 	} else if (tabHolder_->GetVisibility() != V_GONE) {
 		root_->SetDefaultFocusView(tabHolder_);
 	}
+}
+
+void MainScreen::CreateNoticeBars() {
+	using namespace UI;
 
 	root_->SetTag("mainroot");
 
@@ -620,7 +652,418 @@ void MainScreen::CreateViews() {
 #endif
 }
 
+bool MainScreen::UseXmbLayout() const {
+	if (g_Config.iMainMenuLayout != (int)MainMenuLayout::XMB) {
+		return false;
+	}
+	// The warnings about storage are only in the classic layout.
+	const bool hasStorageAccess = !System_GetPropertyBool(SYSPROP_SUPPORTS_PERMISSIONS) ||
+		System_GetPermissionStatus(SYSTEM_PERMISSION_STORAGE) == PERMISSION_STATUS_GRANTED;
+	const bool storageIsTemporary = IsTempPath(GetSysDirectory(DIRECTORY_SAVEDATA)) && !confirmedTemporary_;
+	return hasStorageAccess && !storageIsTemporary;
+}
+
+void MainScreen::CreateXmbViews() {
+	using namespace UI;
+	auto mm = GetI18NCategory(I18NCat::MAINMENU);
+	auto ms = GetI18NCategory(I18NCat::MAINSETTINGS);
+	auto di = GetI18NCategory(I18NCat::DIALOG);
+	auto sa = GetI18NCategory(I18NCat::SAVEDATA);
+	auto nw = GetI18NCategory(I18NCat::NETWORKING);
+
+	xmbLayout_ = true;
+	xmbPanes_.clear();
+	// addPane hands out references into this.
+	xmbPanes_.reserve(7);
+	gameBrowsers_.clear();
+	tabHolder_ = nullptr;
+	xmbScrollTarget_ = -1.0f;
+
+	const bool portrait = GetDeviceOrientation() == DeviceOrientation::Portrait;
+	const float w = g_display.dp_xres;
+	const float h = g_display.dp_yres;
+
+	// From the mockup at 1440x816: the categories 18% from the top, the list 18% from the left and
+	// about 40% wide, the hints along the bottom.
+	const float side = portrait ? 16.0f : 40.0f;
+	const float topBarY = portrait ? 16.0f : 28.0f;
+	const float categoryY = std::max(topBarY + 48.0f, h * 0.147f);
+	const float listX = portrait ? 16.0f : w * 0.178f;
+	const float listY = categoryY + 176.0f;
+	const float listW = portrait ? w - 32.0f : std::min(std::max(w * 0.42f, 420.0f), w - listX - side);
+	const float listBottom = 22.0f + 44.0f + 10.0f;
+	// The pane holder reaches 16 dp past the list on each side, for the icons that hang off the rows.
+	constexpr float holderPad = 16.0f;
+
+	root_ = new LinearLayout(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
+	AnchorLayout *xmb = root_->Add(new AnchorLayout(new LinearLayoutParams(FILL_PARENT, FILL_PARENT, 1.0f)));
+
+	xmbTopBar_ = xmb->Add(new Xmb::TopBar(new AnchorLayoutParams(FILL_PARENT, 40.0f, side, topBarY, side, NONE)));
+
+	// Clipped at the top of the list, which hides the rows above the selected one, as the XMB does.
+	xmbPaneHolder_ = xmb->Add(new AnchorLayout(new AnchorLayoutParams(FILL_PARENT, FILL_PARENT, listX - holderPad, listY, std::max(0.0f, w - listX - listW - holderPad), listBottom)));
+	xmbPaneHolder_->SetClip(true);
+
+	Xmb::HintBar *hints = xmb->Add(new Xmb::HintBar(new AnchorLayoutParams(FILL_PARENT, 44.0f, side, NONE, side, 22.0f)));
+	hints->OnQuickActions.Add([this](EventParams &) {
+		ShowQuickActions();
+	});
+
+	std::vector<Xmb::CategoryBar::Category> categories;
+	auto addPane = [&](XmbCategory category, std::string_view label, ImageID icon, std::string_view crumb) -> XmbPane & {
+		XmbPane pane;
+		pane.category = category;
+		pane.label = label;
+		pane.crumb = crumb;
+		// No edges set, so the slide-in tween moves it rather than squeezing it.
+		pane.scroll = xmbPaneHolder_->Add(new ScrollView(ORIENT_VERTICAL, new AnchorLayoutParams(FILL_PARENT, FILL_PARENT)));
+		pane.scroll->SetTag(StringFromFormat("XmbPane%d", (int)category));
+		pane.scroll->SetShadows(false);
+		pane.scroll->SetScrollbar(false);
+		LinearLayout *content = pane.scroll->Add(new LinearLayout(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, Margins(holderPad, 0.0f, holderPad, 0.0f))));
+		content->SetSpacing(0.0f);
+		pane.content = content;
+		categories.push_back({ std::string(label), icon });
+		xmbPanes_.push_back(pane);
+		return xmbPanes_.back();
+	};
+	auto addItem = [](ViewGroup *parent, std::string_view title, std::string_view subtitle, const char *icon, Xmb::Hue hue, std::function<void()> onClick) {
+		Xmb::Item *item = parent->Add(new Xmb::Item(title, subtitle, ImageID(icon), hue, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT)));
+		item->OnClick.Add([onClick](EventParams &) {
+			onClick();
+		});
+	};
+	auto addBrowser = [&](XmbPane &pane, const Path &path, BrowseFlags flags, int *viewMode, float *scrollPos) {
+		GameBrowser *browser = new GameBrowser(GetRequesterToken(), path, flags | BrowseFlags::XMB, portrait, viewMode, screenManager(), "", "",
+			new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT));
+		browser->OnChoice.Handle(this, &MainScreen::OnGameSelectedInstant);
+		browser->OnHoldChoice.Handle(this, &MainScreen::OnGameSelected);
+		browser->OnHighlight.Handle(this, &MainScreen::OnGameHighlight);
+		if (scrollPos) {
+			pane.scroll->RememberPosition(scrollPos);
+		}
+		pane.browser = browser;
+		gameBrowsers_.push_back(browser);
+		return browser;
+	};
+
+	// Settings: the pages of the settings screen.
+	{
+		XmbPane &pane = addPane(XmbCategory::SETTINGS, ms->T("Settings"), ImageID("I_SLIDERS"), mm->T("GameSettingsCrumb", "Game Settings"));
+		pane.list = pane.content->Add(new Xmb::List(new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT)));
+		struct Page {
+			const char *title;
+			const char *summaryKey;
+			const char *summary;
+			const char *icon;
+			Xmb::Hue hue;
+		};
+		// In the order of GameSettingsScreen's tabs.
+		static const Page pages[] = {
+			{ "Graphics", "GraphicsSummary", "Backend \xC2\xB7 resolution \xC2\xB7 frame rate", "I_DISPLAY", Xmb::Hue::Aqua },
+			{ "Controls", "ControlsSummary", "Mapping \xC2\xB7 touch layout \xC2\xB7 tilt", "I_CONTROLLER", Xmb::Hue::Violet },
+			{ "Audio", "AudioSummary", "Volume \xC2\xB7 backend \xC2\xB7 sound effects", "I_SPEAKER_MAX", Xmb::Hue::Amber },
+			{ "Networking", "NetworkingSummary", "Ad hoc \xC2\xB7 infrastructure \xC2\xB7 ports", "I_WIFI", Xmb::Hue::Lime },
+			{ "Tools", "ToolsSummary", "Save data \xC2\xB7 cheats \xC2\xB7 developer", "I_TOOLS", Xmb::Hue::Coral },
+			{ "System", "SystemSummary", "Language \xC2\xB7 UI \xC2\xB7 storage", "I_PSP", Xmb::Hue::Aqua },
+		};
+		for (int i = 0; i < (int)ARRAY_SIZE(pages); i++) {
+			addItem(pane.list, ms->T(pages[i].title), mm->T(pages[i].summaryKey, pages[i].summary), pages[i].icon, pages[i].hue, [this, i]() {
+				g_Config.iSettingsCurrentTab = i;
+				screenManager()->push(new GameSettingsScreen(Path()));
+			});
+		}
+	}
+
+	if (g_Config.iMaxRecent > 0) {
+		XmbPane &pane = addPane(XmbCategory::RECENT, mm->T("Recent"), ImageID("I_XMB_RECENT"), mm->T("Recently played"));
+		GameBrowser *browser = addBrowser(pane, Path("!RECENT"), BrowseFlags::NONE, &g_Config.iGameBrowserView1, nullptr);
+		pane.content->Add(browser);
+		if (!g_recentFiles.HasAny()) {
+			pane.content->Add(new TextView(mm->T("No recently played games"), ALIGN_VCENTER, true, new LinearLayoutParams(FILL_PARENT, Xmb::ROW_H, Margins(Xmb::ROW_PAD_LEFT, 0, 0, 0))))->SetTextColor(0xFFCBBD9D);
+		}
+	}
+
+	{
+		XmbPane &pane = addPane(XmbCategory::GAMES, mm->T("Games"), ImageID("I_CONTROLLER"), mm->T("Games"));
+		GameBrowser *browser = addBrowser(pane, Path(g_Config.currentDirectory), BrowseFlags::STANDARD, &g_Config.iGameBrowserView2, &g_Config.fGameListScrollPosition);
+		// The browser does the searching, so these items stay put.
+		if (System_GetPropertyBool(SYSPROP_HAS_FILE_BROWSER)) {
+			addItem(pane.content, mm->T("Load", "Load..."), mm->T("LoadSummary", "Browse for a game file"), "I_FOLDER_OPEN", Xmb::Hue::Amber, [this]() {
+				UI::EventParams e{};
+				OnLoadFile(e);
+			});
+		}
+		if (browser->CanBrowseForFolder()) {
+			addItem(pane.content, mm->T("Browse", "Browse..."), mm->T("BrowseSummary", "Choose the folder of your games"), "I_FOLDER", Xmb::Hue::Amber, [browser]() {
+				browser->BrowseForFolder();
+			});
+		}
+		pane.content->Add(browser);
+		addItem(pane.content, mm->T("How to get games"), "ppsspp.org", "I_LINK_OUT", Xmb::Hue::Aqua, []() {
+			System_LaunchUrl(LaunchUrlType::BROWSER_URL, getGamesUri);
+		});
+	}
+
+	{
+		XmbPane &pane = addPane(XmbCategory::HOMEBREW, mm->T("Homebrew & Demos"), ImageID("I_HOMEBREW_STORE"), "PSP/GAME");
+		GameBrowser *browser = addBrowser(pane, GetSysDirectory(DIRECTORY_GAME), BrowseFlags::HOMEBREW_STORE, &g_Config.iGameBrowserView3, &g_Config.fHomebrewScrollPosition);
+		pane.content->Add(browser);
+		addItem(pane.content, mm->T("Homebrew store"), mm->T("HomebrewStoreSummary", "Free homebrew, installed in place"), "I_HOMEBREW_STORE", Xmb::Hue::Violet, [this]() {
+			screenManager()->push(new StoreScreen());
+		});
+		addItem(pane.content, mm->T("How to get homebrew & demos"), "ppsspp.org", "I_LINK_OUT", Xmb::Hue::Aqua, []() {
+			System_LaunchUrl(LaunchUrlType::BROWSER_URL, getHomebrewUri);
+		});
+	}
+
+	{
+		XmbPane &pane = addPane(XmbCategory::SAVED_DATA, sa->T("Save data"), ImageID("I_FILE_SAVE"), "PSP/SAVEDATA");
+		pane.list = pane.content->Add(new Xmb::List(new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT)));
+		addItem(pane.list, sa->T("Save data"), mm->T("SaveDataSummary", "Browse, back up and delete saves"), "I_FILE_SAVE", Xmb::Hue::Aqua, [this]() {
+			screenManager()->push(new SavedataScreen(Path()));
+		});
+	}
+
+	{
+		XmbPane &pane = addPane(XmbCategory::NETWORK, mm->T("Network"), ImageID("I_WEB_BROWSER"), mm->T("Online"));
+		pane.list = pane.content->Add(new Xmb::List(new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT)));
+		addItem(pane.list, nw->T("AdHoc server"), mm->T("AdhocServerSummary", "Choose or host a server"), "I_NETWORK", Xmb::Hue::Aqua, [this]() {
+			auto nw = GetI18NCategory(I18NCat::NETWORKING);
+			screenManager()->push(new AdhocServerScreen(&g_Config.sProAdhocServer, nw->T("Ad hoc server address")));
+		});
+		addItem(pane.list, mm->T("Remote disc streaming"), mm->T("RemoteDiscSummary", "Play games shared from another device"), "I_WIFI", Xmb::Hue::Violet, [this]() {
+			screenManager()->push(new RemoteISOScreen(Path()));
+		});
+		addItem(pane.list, ms->T("Networking"), mm->T("NetworkingSummary", "Ad hoc \xC2\xB7 infrastructure \xC2\xB7 ports"), "I_GEAR", Xmb::Hue::Lime, [this]() {
+			g_Config.iSettingsCurrentTab = 3;
+			screenManager()->push(new GameSettingsScreen(Path()));
+		});
+	}
+
+	{
+		XmbPane &pane = addPane(XmbCategory::PPSSPP, "PPSSPP", ImageID("I_PSP"), mm->T("About PPSSPP"));
+		pane.list = pane.content->Add(new Xmb::List(new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT)));
+		std::string version = PPSSPP_GIT_VERSION;
+		addItem(pane.list, mm->T("About PPSSPP"), version, "I_INFO", Xmb::Hue::Aqua, [this]() {
+			screenManager()->push(new CreditsScreen());
+		});
+		addItem(pane.list, "www.ppsspp.org", mm->T("WebsiteSummary", "Website and guides"), "I_WEB_BROWSER", Xmb::Hue::Violet, []() {
+			System_LaunchUrl(LaunchUrlType::BROWSER_URL, "https://www.ppsspp.org");
+		});
+		if (!System_GetPropertyBool(SYSPROP_APP_GOLD) && System_GetPropertyInt(SYSPROP_DEVICE_TYPE) != DEVICE_TYPE_VR) {
+			addItem(pane.list, mm->T("Buy PPSSPP Gold"), mm->T("GoldSummary", "Support development"), "I_ICON_GOLD", Xmb::Hue::Amber, [this]() {
+				LaunchBuyGold(screenManager());
+			});
+		}
+#if !PPSSPP_PLATFORM(IOS_APP_STORE)
+		addItem(pane.list, di->T("Exit"), mm->T("ExitSummary", "Close PPSSPP"), "I_EXIT", Xmb::Hue::Coral, []() {
+			SaveConfigAndExit();
+		});
+#endif
+	}
+
+	// Room after the last item, so it can scroll up to the top like the others.
+	const float tailH = std::max(0.0f, h - listY - listBottom - Xmb::ROW_H_FOCUSED);
+	for (XmbPane &pane : xmbPanes_) {
+		pane.content->Add(new Spacer(tailH));
+		pane.scroll->SetVisibility(V_GONE);
+	}
+
+	xmbCategoryBar_ = xmb->Add(new Xmb::CategoryBar(categories, new AnchorLayoutParams(FILL_PARENT, 150.0f, 0.0f, categoryY, 0.0f, NONE)));
+	xmbCategoryBar_->SetAnchorX(listX + Xmb::ORB_X_IN_LIST);
+	xmbCategoryBar_->OnChoice.Add([this](EventParams &e) {
+		SetXmbPane((int)e.a, true);
+	});
+
+	// Which category to start in, like the classic layout's default tab.
+	XmbCategory start = XmbCategory::GAMES;
+	if (xmbCategory_ >= 0) {
+		start = (XmbCategory)xmbCategory_;
+	} else if (g_recentFiles.HasAny() && g_Config.iMaxRecent > 0) {
+		start = XmbCategory::RECENT;
+	}
+	if (backFromStore_ || showHomebrewTab) {
+		start = XmbCategory::HOMEBREW;
+		backFromStore_ = false;
+		showHomebrewTab = false;
+	}
+	// Recent may be turned off. Then Games.
+	int startPane = -1;
+	int gamesPane = 0;
+	for (int i = 0; i < (int)xmbPanes_.size(); i++) {
+		if (xmbPanes_[i].category == start) {
+			startPane = i;
+		}
+		if (xmbPanes_[i].category == XmbCategory::GAMES) {
+			gamesPane = i;
+		}
+	}
+	if (startPane < 0) {
+		startPane = gamesPane;
+	}
+	xmbPane_ = -1;
+	SetXmbPane(startPane, false);
+}
+
+void MainScreen::SetXmbPane(int index, bool animate) {
+	using namespace UI;
+	if (index < 0 || index >= (int)xmbPanes_.size() || index == xmbPane_) {
+		return;
+	}
+	const int old = xmbPane_;
+	xmbPane_ = index;
+	XmbPane &pane = xmbPanes_[index];
+	xmbCategory_ = (int)pane.category;
+	xmbScrollTarget_ = -1.0f;
+
+	View *focused = GetFocusedView();
+	if (old >= 0) {
+		XmbPane &prev = xmbPanes_[old];
+		// Like the XMB, leaving a category forgets its search.
+		if (prev.browser && !prev.browser->SearchFilter().empty()) {
+			prev.browser->SetSearchFilter("", false);
+		}
+		if (prev.list) {
+			prev.list->ClearSearch();
+		}
+		prev.scroll->SetVisibility(V_GONE);
+		if (focused && prev.scroll->ContainsSubview(focused) && !IsFocusMovementEnabled()) {
+			SetFocusedView(nullptr, FocusFlags::CAUSE_FOCUS_MOVE);
+		}
+	}
+
+	pane.scroll->SetVisibility(V_VISIBLE);
+	if (animate && old >= 0) {
+		// Slide in from the side it's on, as the orbs slide the other way.
+		AnchorTranslateTween *tween = new AnchorTranslateTween(0.3f, bezierEaseInOut);
+		pane.scroll->AddTween(tween);
+		tween->Reset(Point2D(index > old ? 80.0f : -80.0f, 0.0f));
+		tween->Apply(pane.scroll);
+		tween->Divert(Point2D(0.0f, 0.0f));
+		PlayUISound(index > old ? UISound::TOGGLE_ON : UISound::TOGGLE_OFF);
+	}
+	if (xmbCategoryBar_) {
+		xmbCategoryBar_->SetSelected(index, animate);
+	}
+	root_->SetDefaultFocusView(pane.scroll);
+
+	if (IsFocusMovementEnabled()) {
+		if (!(pane.lastFocus && pane.scroll->ContainsSubview(pane.lastFocus) && pane.lastFocus->GetVisibility() == V_VISIBLE && pane.lastFocus->SetFocus(FocusFlags::CAUSE_OTHER))) {
+			pane.scroll->SetFocus(FocusFlags::CAUSE_OTHER);
+		}
+	}
+}
+
+void MainScreen::UpdateXmb() {
+	using namespace UI;
+	if (xmbPane_ < 0 || xmbPane_ >= (int)xmbPanes_.size()) {
+		return;
+	}
+	XmbPane &pane = xmbPanes_[xmbPane_];
+
+	std::string location = pane.browser ? pane.browser->FriendlyPath() : "";
+	xmbTopBar_->SetCrumb(pane.label, location.empty() ? pane.crumb : location);
+	xmbTopBar_->SetSearch(pane.browser ? pane.browser->SearchFilter() : pane.list ? pane.list->SearchFilter() : "");
+	xmbCategoryBar_->SetAnchorX(xmbPaneHolder_->GetBounds().x + 16.0f + Xmb::ORB_X_IN_LIST);
+
+	// Keep the selected row at the top of the list, like the XMB.
+	View *focused = GetFocusedView();
+	if (!focused || !pane.scroll->ContainsSubview(focused)) {
+		return;
+	}
+	pane.lastFocus = focused;
+	if (!IsFocusMovementEnabled()) {
+		return;
+	}
+	const float offset = focused->GetBounds().y - pane.content->GetBounds().y;
+	if (fabsf(offset - xmbScrollTarget_) > 0.5f) {
+		pane.scroll->ScrollTo(offset);
+		xmbScrollTarget_ = offset;
+	}
+}
+
+bool MainScreen::XmbKey(const KeyInput &key) {
+	if (!(key.flags & KeyInputFlags::DOWN)) {
+		return false;
+	}
+	if ((key.keyCode == NKCODE_K && (key.flags & KEY_MOD_SHORTCUT)) || UI::IsQuickActionKey(key)) {
+		ShowQuickActions();
+		return true;
+	}
+	// The keyboard's left and right also change category, as the list only goes up and down.
+	const bool keyboardOrPad = key.deviceId != DEVICE_ID_MOUSE;
+	if (UI::IsTabLeftKey(key) || key.keyCode == NKCODE_PAGE_UP || (keyboardOrPad && key.keyCode == NKCODE_DPAD_LEFT && !(key.flags & KeyInputFlags::ModAlt))) {
+		SetXmbPane(xmbPane_ - 1, true);
+		return true;
+	}
+	if (UI::IsTabRightKey(key) || key.keyCode == NKCODE_PAGE_DOWN || (keyboardOrPad && key.keyCode == NKCODE_DPAD_RIGHT && !(key.flags & KeyInputFlags::ModAlt))) {
+		SetXmbPane(xmbPane_ + 1, true);
+		return true;
+	}
+	return false;
+}
+
+void MainScreen::ShowQuickActions() {
+	auto mm = GetI18NCategory(I18NCat::MAINMENU);
+	auto di = GetI18NCategory(I18NCat::DIALOG);
+	auto sy = GetI18NCategory(I18NCat::SYSTEM);
+
+	struct Action {
+		std::string title;
+		const char *icon;
+		std::function<void()> run;
+	};
+	std::vector<Action> actions;
+	if (System_GetPropertyBool(SYSPROP_HAS_FILE_BROWSER)) {
+		actions.push_back({ std::string(mm->T("Load", "Load...")), "I_FOLDER_OPEN", [this]() {
+			UI::EventParams e{};
+			OnLoadFile(e);
+		} });
+	}
+	actions.push_back({ std::string(mm->T("Game Settings", "Settings")), "I_GEAR", [this]() {
+		screenManager()->push(new GameSettingsScreen(Path()));
+	} });
+	if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) == DEVICE_TYPE_DESKTOP) {
+		actions.push_back({ std::string(mm->T("Toggle fullscreen")), "I_FULLSCREEN", []() {
+			g_Config.bFullScreen = !g_Config.bFullScreen;
+			System_ApplyFullscreenState();
+		} });
+	}
+	if (g_Config.iMaxRecent > 0 && g_recentFiles.HasAny()) {
+		actions.push_back({ std::string(sy->T("Clear Recent Games List")), "I_TRASHCAN", [this]() {
+			g_recentFiles.Clear();
+			screenManager()->RecreateAllViews();
+		} });
+	}
+	actions.push_back({ std::string(mm->T("About PPSSPP")), "I_INFO", [this]() {
+		screenManager()->push(new CreditsScreen());
+	} });
+#if !PPSSPP_PLATFORM(IOS_APP_STORE)
+	actions.push_back({ std::string(di->T("Exit")), "I_EXIT", []() {
+		SaveConfigAndExit();
+	} });
+#endif
+
+	std::vector<std::string> titles;
+	std::map<int, ImageID> icons;
+	for (int i = 0; i < (int)actions.size(); i++) {
+		titles.push_back(actions[i].title);
+		icons[i] = ImageID(actions[i].icon);
+	}
+	UI::ListPopupScreen *popup = new UI::ListPopupScreen(mm->T("Quick actions"), titles, -1, [actions](int choice) {
+		if (choice >= 0 && choice < (int)actions.size()) {
+			actions[choice].run();
+		}
+	});
+	popup->SetChoiceIcons(icons);
+	screenManager()->push(popup);
+}
+
 bool MainScreen::key(const KeyInput &key) {
+	if (xmbLayout_ && XmbKey(key)) {
+		return true;
+	}
 	if (key.flags & KeyInputFlags::DOWN) {
 		if (key.keyCode == NKCODE_F && (key.flags & KEY_MOD_SHORTCUT) && System_GetPropertyBool(SYSPROP_HAS_TEXT_INPUT_DIALOG)) {
 			auto se = GetI18NCategory(I18NCat::SEARCH);
@@ -690,6 +1133,12 @@ void MainScreen::update() {
 	UIScreen::update();
 	UpdateUIState(UISTATE_MENU);
 
+	if (builtLayout_ != g_Config.iMainMenuLayout) {
+		RecreateViews();
+	} else if (xmbLayout_) {
+		UpdateXmb();
+	}
+
 	if (packGeneration_ != GamePacker::Generation()) {
 		// A pack finished: a new file, and maybe the original gone.
 		packGeneration_ = GamePacker::Generation();
@@ -750,7 +1199,8 @@ void MainScreen::DrawBackground(UIContext &dc) {
 			continue;
 		}
 
-		DrawBackgroundTexture(dc, ginfo->pic1.texture, Lin::Vec3(0.0f, 0.0f, 0.0f), alpha);
+		// The XMB layout keeps it faint behind the ribbon, so the list stays readable.
+		DrawBackgroundTexture(dc, ginfo->pic1.texture, Lin::Vec3(0.0f, 0.0f, 0.0f), xmbLayout_ ? alpha * 0.3f : alpha);
 	}
 }
 
@@ -885,9 +1335,15 @@ void MainScreen::dialogFinished(const Screen *dialog, DialogResult result) {
 			InstantHighlight(restoreFocusGamePath_);
 
 			// Refocus the game button itself.
-			int tab = tabHolder_->GetCurrentTab();
-			if (tab >= 0 && tab < (int)gameBrowsers_.size()) {
-				gameBrowsers_[tab]->FocusGame(restoreFocusGamePath_);
+			if (xmbLayout_) {
+				if (xmbPane_ >= 0 && xmbPane_ < (int)xmbPanes_.size() && xmbPanes_[xmbPane_].browser) {
+					xmbPanes_[xmbPane_].browser->FocusGame(restoreFocusGamePath_);
+				}
+			} else {
+				int tab = tabHolder_->GetCurrentTab();
+				if (tab >= 0 && tab < (int)gameBrowsers_.size()) {
+					gameBrowsers_[tab]->FocusGame(restoreFocusGamePath_);
+				}
 			}
 
 			// Don't get confused next time.

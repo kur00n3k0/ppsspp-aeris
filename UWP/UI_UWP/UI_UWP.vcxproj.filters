@@ -173,6 +173,9 @@
     <ClCompile Include="..\..\UI\MiscViews.cpp">
       <Filter>Screens</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\UI\XmbViews.cpp">
+      <Filter>Screens</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\UI\Background.cpp" />
     <ClCompile Include="..\..\UI\BaseScreens.cpp" />
     <ClCompile Include="..\..\UI\AdhocServerScreen.cpp">
@@ -333,6 +336,9 @@
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="..\..\UI\MiscViews.h">
+      <Filter>Screens</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\UI\XmbViews.h">
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="..\..\UI\Background.h" />

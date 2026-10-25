@@ -43,6 +43,7 @@ std::vector<InputMapping> cancelKeys;
 std::vector<InputMapping> infoKeys;
 std::vector<InputMapping> tabLeftKeys;
 std::vector<InputMapping> tabRightKeys;
+std::vector<InputMapping> quickActionKeys;
 
 static std::unordered_map<InputDeviceID, int> uiFlipAnalogY;
 
@@ -76,6 +77,10 @@ void SetTabLeftRightKeys(const std::vector<InputMapping> &tabLeft, const std::ve
 
 void SetInfoKeys(const std::vector<InputMapping> &info) {
 	infoKeys = info;
+}
+
+void SetQuickActionKeys(const std::vector<InputMapping> &quickAction) {
+	quickActionKeys = quickAction;
 }
 
 void SetAnalogFlipY(const std::unordered_map<InputDeviceID, int> &flipYByDeviceId) {

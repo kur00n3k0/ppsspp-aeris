@@ -21,6 +21,8 @@ enum class BrowseFlags {
 	PIN = 8,
 	HOMEBREW_STORE = 16,
 	UPLOAD_BUTTON = 32,
+	// Rows styled for the XMB main menu, without the browser's own toolbar, pin button and link.
+	XMB = 64,
 	STANDARD = 1 | 2 | 4 | 8 | 32,
 };
 ENUM_CLASS_BITOPS(BrowseFlags);
@@ -47,6 +49,12 @@ public:
 	void SetHomePath(const Path &path) {
 		homePath_ = path;
 	}
+
+	const std::string &SearchFilter() const { return search_.searchFilter; }
+	// The current folder as shown in the toolbar (empty for Recent).
+	std::string FriendlyPath() const;
+	bool CanBrowseForFolder() const;
+	void BrowseForFolder();
 
 protected:
 	virtual bool HasSpecialFiles(std::vector<Path> &filenames);

@@ -134,6 +134,7 @@ void UpdateNativeMenuKeys() {
 	std::vector<InputMapping> tabLeft, tabRight;
 	std::vector<InputMapping> upKeys, downKeys, leftKeys, rightKeys;
 	std::vector<InputMapping> infoKeys;
+	std::vector<InputMapping> quickActionKeys;
 
 	// Mouse mapping might be problematic in UI, so let's ignore mouse for UI
 	const bool confirmWithCross = g_Config.iButtonPreference == PSP_SYSTEMPARAM_BUTTON_CROSS;
@@ -144,6 +145,7 @@ void UpdateNativeMenuKeys() {
 	SingleInputMappingFromPspButton(confirmKey, &confirmKeys, true);
 	SingleInputMappingFromPspButton(cancelKey, &cancelKeys, true);
 	SingleInputMappingFromPspButton(CTRL_TRIANGLE, &infoKeys, true);
+	SingleInputMappingFromPspButton(CTRL_SELECT, &quickActionKeys, true);
 	SingleInputMappingFromPspButton(CTRL_LTRIGGER, &tabLeft, true);
 	SingleInputMappingFromPspButton(CTRL_RTRIGGER, &tabRight, true);
 	SingleInputMappingFromPspButton(CTRL_UP, &upKeys, true);
@@ -214,11 +216,15 @@ void UpdateNativeMenuKeys() {
 	RemoveKeyboardLetterKeys(confirmKeys);
 	RemoveKeyboardLetterKeys(cancelKeys);
 	RemoveKeyboardLetterKeys(infoKeys);
+	// Space is also confirm, and letters are for searching.
+	RemoveKeyboardLetterKeys(quickActionKeys);
+	quickActionKeys.erase(std::remove(quickActionKeys.begin(), quickActionKeys.end(), InputMapping(DEVICE_ID_KEYBOARD, NKCODE_SPACE)), quickActionKeys.end());
 
 	SetDPadKeys(upKeys, downKeys, leftKeys, rightKeys);
 	SetConfirmCancelKeys(confirmKeys, cancelKeys);
 	SetTabLeftRightKeys(tabLeft, tabRight);
 	SetInfoKeys(infoKeys);
+	SetQuickActionKeys(quickActionKeys);
 
 	std::unordered_map<InputDeviceID, int> flipYByDeviceId;
 	for (InputDeviceID deviceId : g_seenDeviceIds) {

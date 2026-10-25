@@ -469,6 +469,7 @@ public:
 	bool bShowIDOnGameIcon;
 	float fGameGridScale;
 	int iBackgroundAnimation;  // enum BackgroundAnimation
+	int iMainMenuLayout;  // enum MainMenuLayout
 	bool bTransparentBackground;
 	int iSettingsCurrentTab;
 

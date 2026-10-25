@@ -142,6 +142,9 @@ public:
 		DrawRoundRect(bounds.x, bounds.y, bounds.x2(), bounds.y2(), radius, color, style, corners);
 	}
 
+	// Filled, with the color going from colorTop at y1 to colorBottom at y2.
+	void DrawRoundRectVGradient(float x1, float y1, float x2, float y2, float radius, Color colorTop, Color colorBottom);
+
 	// This is only 6 triangles, much cheaper.
 	void DrawImage2GridH(ImageID atlas_image, float x1, float y1, float x2, Color color = COLOR(0xFFFFFF), float scale = 1.0);
 

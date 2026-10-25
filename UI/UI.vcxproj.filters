@@ -175,6 +175,9 @@
     <ClCompile Include="MiscViews.cpp">
       <Filter>Views</Filter>
     </ClCompile>
+    <ClCompile Include="XmbViews.cpp">
+      <Filter>Views</Filter>
+    </ClCompile>
     <ClCompile Include="BaseScreens.cpp">
       <Filter>Screens</Filter>
     </ClCompile>
@@ -343,6 +346,9 @@
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="MiscViews.h">
+      <Filter>Views</Filter>
+    </ClInclude>
+    <ClInclude Include="XmbViews.h">
       <Filter>Views</Filter>
     </ClInclude>
     <ClInclude Include="BaseScreens.h">
