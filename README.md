@@ -1,3 +1,53 @@
+PPSSPP AERIS
+============
+
+AERIS is an unofficial fork of [PPSSPP](https://github.com/hrydgard/ppsspp) with a redesigned main menu in the style
+of the PSP's XMB. It isn't affiliated with or supported by the PPSSPP project; please report problems with it here,
+not upstream.
+
+![The AERIS main menu](docs/images/aeris-xmb.png)
+
+What's different
+----------------
+
+- **XMB main menu.** A row of categories (Settings, Recent, Games, Homebrew & Demos, Save data, Network, PPSSPP)
+  over one list at a time. The selected row grows and stays at the top of the list, with the game's PIC1 background,
+  ICON1 video and SND0 music behind it.
+- **Status and hints.** The top bar shows where you are, the search as you type, the graphics backend, the battery
+  (where the platform reports it) and the clock. The bottom bar shows the buttons for each action.
+- **Quick actions.** SELECT or Ctrl+K: Load, Settings, fullscreen, clear the recent list, About and Exit.
+- **AERIS themes.** Six colors (Aqua, Lime, Sunset, Mint, Forest, Bubblegum) in `assets/themes/aeris.ini`.
+- **XMB ribbon background.** An animated ribbon with a sky glow, a faint grid and sparkles.
+
+The classic PPSSPP menu is one setting away: **Settings > System > Main menu layout**. The theme and the background
+animation are in the same place.
+
+### Controls
+
+| Action | Gamepad | Keyboard |
+|---|---|---|
+| Move | D-pad | Arrow keys |
+| Change category | L / R, or left / right | PgUp / PgDn, or left / right |
+| Confirm | ✕ (or ○, per the confirm button setting) | Enter, Space |
+| Back | ○ (or ✕) | Esc |
+| Game info | △ | Numpad + |
+| Quick actions | SELECT | Ctrl+K |
+| Search | | Type |
+
+### Building
+
+The same as PPSSPP. On Linux and Mac:
+
+```
+git submodule update --init --recursive
+./b.sh
+./build/PPSSPPSDL
+```
+
+See [docs/building.md](docs/building.md) for the other platforms.
+
+---
+
 PPSSPP - a fast and portable PSP emulator
 =========================================
 
